@@ -3,6 +3,7 @@ import pickle
 import cv2
 import pyvirtualcam
 import sklearn.ensemble as ensemble
+import numpy as np
 
 with open('hand_recognition_model.pkl', 'rb') as file:
     pickle_model = pickle.load(file)
@@ -17,10 +18,24 @@ FPS = 20
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
+DEBUG = False
+
+
+def predict_(feats, min_confidence):
+    global pickle_model
+    probs = pickle_model.predict_proba(feats)[0]
+
+    largest_prob = np.max(probs)
+    index = np.where(probs == largest_prob)[0][0]
+    prediction = ['Delete', 'Ellipse', 'Line', 'Move',
+                  'Rectangle', 'Triangle'][index]
+    if largest_prob < min_confidence:
+        return ''
+    return prediction
+
+
 with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
-    with mp_hands.Hands(static_image_mode=False,
-                        min_detection_confidence=0.7,
-                        min_tracking_confidence=0.7) as hands:
+    with mp_hands.Hands() as hands:
         while True:
             ret_val, image = capture.read()
 
@@ -32,37 +47,46 @@ with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
             annotated_image = image.copy()
 
             results = hands.process(image)
-            mh_landmarks = results.multi_hand_landmarks
+            multi_hand_world = results.multi_hand_world_landmarks
+            multi_hand = results.multi_hand_landmarks
 
-            if mh_landmarks:
-                for hand_landmarks in mh_landmarks:
-                    # Print index finger tip coordinates.
-                    mp_drawing.draw_landmarks(
-                        annotated_image,
-                        hand_landmarks,
-                        mp_hands.HAND_CONNECTIONS,
-                        mp_drawing_styles.get_default_hand_landmarks_style(),
-                        mp_drawing_styles.get_default_hand_connections_style())
+            if multi_hand:
+                if DEBUG:
+                    for hand_landmarks in multi_hand:
+                        # Print index finger tip coordinates.
+                        mp_drawing.draw_landmarks(
+                            annotated_image,
+                            hand_landmarks,
+                            mp_hands.HAND_CONNECTIONS,
+                            mp_drawing_styles.get_default_hand_landmarks_style(),
+                            mp_drawing_styles.get_default_hand_connections_style())
 
                 handedness = results.multi_handedness[0].classification[0].label
 
-                text_x = int(mh_landmarks[0].landmark[0].x * capture.get(3))
-                text_y = int(mh_landmarks[0].landmark[0].y * capture.get(4))
+                # set text coordinates
+                if DEBUG:
+                    text_x = int(multi_hand[0].landmark[0].x * capture.get(3))
+                    text_y = int(multi_hand[0].landmark[0].y * capture.get(4))
+                else:
+                    text_x = 100
+                    text_y = 100
 
                 # print(handedness, end='')
                 if handedness == 'Right':
-                    list_tuples = [(1-i.x, i.y, i.z) for i in mh_landmarks[0].landmark]
+                    list_tuples = [(-i.x, i.y, i.z) for i in multi_hand_world[0].landmark]
                 if handedness == 'Left':
-                    list_tuples = [(i.x, i.y, i.z) for i in mh_landmarks[0].landmark]
+                    list_tuples = [(i.x, i.y, i.z) for i in multi_hand_world[0].landmark]
 
                 features = [[i for t in list_tuples for i in t]]
 
-                pred = pickle_model.predict(features)
-                # print(pred)
+                pred = predict_(features, min_confidence=0.65)
+                if DEBUG:
+                    print(pred, end='\t')
+                    print(pickle_model.predict_proba(features))
 
                 annotated_image = cv2.putText(
                     annotated_image,
-                    str(pred[0]),
+                    pred,
                     (text_x, text_y),
                     FONT, 3, (0, 0, 0), 5, cv2.LINE_AA)
 
