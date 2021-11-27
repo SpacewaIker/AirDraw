@@ -4,6 +4,8 @@ import cv2
 import pyvirtualcam
 import sklearn.ensemble as ensemble
 import numpy as np
+import pandas as pd
+import os
 
 with open('hand_recognition_model.pkl', 'rb') as file:
     pickle_model = pickle.load(file)
@@ -18,10 +20,26 @@ FPS = 20
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
+DIR = 'Datapoint_files/'   # directory for the datapoint files
 DEBUG = False
 
+last = ''
+CONTROLS = ['', 'Move', 'Delete']
+SHAPES = ['Ellipse', 'Rectangle', 'Triangle', 'Line']
+collecting = False
 
-def predict_(feats, min_confidence):
+# Check for previous datapoint files
+i = 1
+while True:
+    if os.path.isfile(DIR + f'dp_{i}.csv'):
+        i += 1
+        continue
+
+    file_num = i
+    break
+
+
+def predict_(feats, last, min_confidence):
     global pickle_model
     probs = pickle_model.predict_proba(feats)[0]
 
@@ -29,9 +47,13 @@ def predict_(feats, min_confidence):
     index = np.where(probs == largest_prob)[0][0]
     prediction = ['Delete', 'Ellipse', 'Line', 'Move',
                   'Rectangle', 'Triangle'][index]
-    if largest_prob < min_confidence:
-        return ''
-    return prediction
+
+    # Checks that the probability is larger than the minimal confidence
+    # or that the prediction is equal to the last (this avoids "flickering")
+    if (largest_prob > min_confidence) or (prediction == last):
+        return prediction
+
+    return ''
 
 
 with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
@@ -63,14 +85,6 @@ with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
 
                 handedness = results.multi_handedness[0].classification[0].label
 
-                # set text coordinates
-                if DEBUG:
-                    text_x = int(multi_hand[0].landmark[0].x * capture.get(3))
-                    text_y = int(multi_hand[0].landmark[0].y * capture.get(4))
-                else:
-                    text_x = 100
-                    text_y = 100
-
                 # print(handedness, end='')
                 if handedness == 'Right':
                     list_tuples = [(-i.x, i.y, i.z) for i in multi_hand_world[0].landmark]
@@ -79,7 +93,7 @@ with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
 
                 features = [[i for t in list_tuples for i in t]]
 
-                pred = predict_(features, min_confidence=0.65)
+                pred = predict_(features, last, min_confidence=0.65)
                 if DEBUG:
                     print(pred, end='\t')
                     print(pickle_model.predict_proba(features))
@@ -87,8 +101,33 @@ with pyvirtualcam.Camera(width=1280, height=720, fps=FPS, fmt=fmt) as camera:
                 annotated_image = cv2.putText(
                     annotated_image,
                     pred,
-                    (text_x, text_y),
+                    (100, 100),
                     FONT, 3, (0, 0, 0), 5, cv2.LINE_AA)
+
+                # Datapoints collection for drawing
+                if (last in CONTROLS) and (pred in SHAPES):
+                    if DEBUG:
+                        print('Begin collecting data')
+
+                    datapoints = pd.DataFrame()
+                    collecting = True
+
+                if (last in SHAPES) and (pred in CONTROLS):
+                    file = pd.DataFrame([last]).append(datapoints)
+                    file.to_csv(
+                        DIR + f'dp_{file_num}.csv', index=False)
+                    file_num += 1
+                    collecting = False
+                    if DEBUG:
+                        print('Finish collecting data')
+                        print(file)
+
+                if collecting:
+                    x = multi_hand[0].landmark[9].x
+                    y = multi_hand[0].landmark[9].y
+                    datapoints = datapoints.append([[x, y]])
+
+                last = pred
 
             cv2.imshow('Preview',
                        cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
